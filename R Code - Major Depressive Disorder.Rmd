@@ -1,0 +1,166 @@
+---
+title: "STA 652 - Project One"
+author: "Richel Attafuah"
+date: "2026-02-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+# ----------------------------
+#Simulate ONE trial
+# ----------------------------
+
+set.seed(1)
+
+# 1) Choose trial settings (assumptions)
+n_per_group <- 200          # try 200 per arm for now
+Delta <- 2                  # non-inferiority margin (PHQ-9 points)
+sigma_followup <- 6.9       # SD of PHQ-9 at 12 weeks
+rho <- 0.5                  # correlation between baseline and 12-week PHQ-9
+alpha_one_sided <- 0.025    # one-sided alpha for non-inferiority
+
+# 2) Generate treatment assignment
+#    0 = Face-to-face CBT (control), 1 = Digital CBT (new)
+treat <- rep(c(0, 1), each = n_per_group)
+
+# 3) Simulate baseline PHQ-9 scores (roughly moderate depression)
+#    We'll keep it simple: Normal with mean 15, SD 4
+baseline <- rnorm(2 * n_per_group, mean = 15, sd = 4)
+
+# 4) Create correlated noise so follow-up is related to baseline
+#    If Z1 and Z2 are independent N(0,1),
+#    then (rho*Z1 + sqrt(1-rho^2)*Z2) is N(0,1) and correlated with Z1 by rho
+z1 <- scale(baseline)                 # standardized baseline ~ acts like Z1
+z2 <- rnorm(2 * n_per_group)          # independent noise Z2
+eps <- as.numeric(rho * z1 + sqrt(1 - rho^2) * z2)  # correlated N(0,1)
+
+# 5) Simulate TRUE treatment effect (digital - face-to-face)
+#    For planning, assume true difference is 0 (similar efficacy)
+delta_true <- 0
+
+# 6) Generate 12-week PHQ-9
+#    Follow-up = (mean level) + (treatment effect) + (random variability)
+#    We include a baseline relationship implicitly via eps construction.
+mean_followup <- 9  # average PHQ-9 after treatment (plausible)
+followup <- mean_followup + delta_true * treat + sigma_followup * eps
+
+# 7) Run ANCOVA: follow-up ~ treatment + baseline
+dat <- data.frame(followup = followup, treat = treat, baseline = baseline)
+
+fit <- lm(followup ~ treat + baseline, data = dat)
+
+# 8) Extract treatment effect estimate and its CI (digital - face-to-face)
+#    In this model, the coefficient on treat is the adjusted mean difference
+est <- coef(summary(fit))["treat", "Estimate"]
+se  <- coef(summary(fit))["treat", "Std. Error"]
+
+# For a one-sided alpha=0.025 NI test, we use the upper bound of the 95% two-sided CI
+tcrit <- qt(1 - alpha_one_sided, df = fit$df.residual)  # ~97.5th percentile
+upper_CI <- est + tcrit * se
+
+# 9) Non-inferiority decision rule:
+#    conclude NI if upper CI < Delta
+non_inferior <- (upper_CI < Delta)
+
+cat("Adjusted treatment effect estimate (digital - face-to-face):", round(est, 3), "\n")
+cat("Upper CI bound:", round(upper_CI, 3), "\n")
+cat("Non-inferior (upper CI < Delta)?", non_inferior, "\n")
+```
+
+```{r}
+# ---------------------------------------------------
+# Function that simulates ONE trial (ANCOVA)
+# and returns TRUE/FALSE for non-inferiority success
+# ---------------------------------------------------
+
+one_trial_success <- function(n_per_group,
+                              Delta = 2,
+                              sigma_followup = 6.9,
+                              rho = 0.5,
+                              alpha_one_sided = 0.025,
+                              delta_true = 0,
+                              mean_baseline = 15,
+                              sd_baseline = 4,
+                              mean_followup = 9) {
+
+  # Treatment assignment: 0=control (FtF), 1=digital (dCBT)
+  treat <- rep(c(0, 1), each = n_per_group)
+
+  # Baseline PHQ-9
+  baseline <- rnorm(2 * n_per_group, mean = mean_baseline, sd = sd_baseline)
+
+  # Correlated error term to induce baseline-followup correlation
+  z1 <- scale(baseline)
+  z2 <- rnorm(2 * n_per_group)
+  eps <- as.numeric(rho * z1 + sqrt(1 - rho^2) * z2)
+
+  # Follow-up PHQ-9 (12 weeks)
+  followup <- mean_followup + delta_true * treat + sigma_followup * eps
+
+  # ANCOVA
+  dat <- data.frame(followup = followup, treat = treat, baseline = baseline)
+  fit <- lm(followup ~ treat + baseline, data = dat)
+
+  # Extract treatment effect and its SE
+  est <- coef(summary(fit))["treat", "Estimate"]
+  se  <- coef(summary(fit))["treat", "Std. Error"]
+
+  # Upper bound for NI decision (upper 95% CI bound)
+  tcrit <- qt(1 - alpha_one_sided, df = fit$df.residual)
+  upper_CI <- est + tcrit * se
+
+  # Non-inferiority success
+  (upper_CI < Delta)
+}
+
+# Quick test: run ONE simulated trial and see TRUE/FALSE
+set.seed(1)
+one_trial_success(n_per_group = 200)
+```
+```{r}
+# ---------------------------------------
+#  Estimate power for a given n
+# ---------------------------------------
+
+estimate_power <- function(n_per_group, n_sims = 2000, seed = 123) {
+  set.seed(seed)
+  results <- replicate(n_sims, one_trial_success(n_per_group = n_per_group))
+  mean(results)  # proportion of TRUE = estimated power
+}
+
+# power when n=200 per group
+power_200 <- estimate_power(n_per_group = 200, n_sims = 2000, seed = 123)
+power_200
+```
+```{r}
+# -------------------------------------------------
+# Search for minimum n with power >= 0.90
+# -------------------------------------------------
+
+target_power <- 0.90
+n_values <- seq(120, 260, by = 10)   # try a range of sample sizes
+power_results <- numeric(length(n_values))
+
+for (i in seq_along(n_values)) {
+  power_results[i] <- estimate_power(n_per_group = n_values[i],
+                                      n_sims = 2000,
+                                      seed = 123)
+  cat("n =", n_values[i], 
+      " -> Power =", round(power_results[i], 3), "\n")
+}
+
+# Combine results
+results_table <- data.frame(
+  n_per_group = n_values,
+  power = power_results
+)
+
+results_table
+```
+
+
