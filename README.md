@@ -1,6 +1,5 @@
 # Clinical Trial Design: Digital vs. Face-to-Face CBT for Major Depressive Disorder
 
-**Course:** STA 652 — Spring 2026 | Miami University, Dept. of Statistics  
 **Author:** Richel Ohenewaa Attafuah
 
 ---
